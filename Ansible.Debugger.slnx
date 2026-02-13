@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ansible.Debugger.Shared/Ansible.Debugger.Shared.csproj" />
+    <Project Path="src/Ansible.Debugger/Ansible.Debugger.csproj" />
+    <Project Path="src/Script.Generator/Script.Generator.csproj" />
+  </Folder>
+</Solution>
