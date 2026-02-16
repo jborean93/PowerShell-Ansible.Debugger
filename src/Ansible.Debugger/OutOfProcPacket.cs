@@ -32,14 +32,12 @@ public readonly record struct OutOfProcPacket(
             throw new InvalidDataException($"Invalid PSGuid value: {psGuidRaw}");
         }
 
-        string? stream = null;
+        string stream = element.Attribute("Stream")?.Value
+            ?? throw new InvalidDataException($"Missing Stream attribute");
         PSRPFragment[] fragments = [];
         PSRPMessage[] messages = [];
         if (elementType == "Data")
         {
-            stream = element.Attribute("Stream")?.Value
-                ?? throw new InvalidDataException("Missing Stream attribute on Data element");
-
             string fragmentB64 = element.Value;
             (fragments, messages) = ParseFragments(fragmentB64, fragements);
         }

@@ -18,11 +18,17 @@ namespace Ansible.Debugger.Commands;
 [OutputType(typeof(void))]
 public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
 {
-    internal const string StartMsgMarker = "PowerShell Debugger Listener started";
     private const string PwshSockPath = "~/.ansible/test/debugging/pwsh-listener.sock";
+    internal const string StartMsgMarker = "PowerShell Debugger Listener started";
+
 
     [Parameter]
     public string? PSRemotingLogPath { get; set; }
+
+    [Parameter(
+        DontShow = true
+    )]
+    public string? __Internal_ForTesting { get; set; }
 
     protected override async Task EndProcessingAsync(AsyncPipeline pipeline, CancellationToken cancellationToken)
     {
@@ -44,8 +50,15 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
             ThrowTerminatingError(errorRecord);
         }
 
+        string? logPath = null;
+        if (!string.IsNullOrWhiteSpace(PSRemotingLogPath))
+        {
+            logPath = SessionState.Path.GetUnresolvedProviderPathFromPSPath(PSRemotingLogPath);
+            pipeline.WriteVerbose($"Using PSRemoting log path: '{logPath}'");
+        }
+
         string sockPathFull = SessionState.Path.GetUnresolvedProviderPathFromPSPath(
-            PwshSockPath);
+            string.IsNullOrWhiteSpace(__Internal_ForTesting) ? PwshSockPath : __Internal_ForTesting);
         string sockPathDir = Path.GetDirectoryName(sockPathFull)!;
         if (!Directory.Exists(sockPathDir))
         {
@@ -85,6 +98,9 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
 
         using Socket ansibleClient = await listenerSock.AcceptAsync(cancellationToken);
 
+        // We don't allow subsequent connections without restarting the cmdlet.
+        listenerSock.Close();
+
         pipeline.WriteVerbose($"Ansible client connected, starting debug session");
 
         // Create a linked cancellation token that will be cancelled when
@@ -101,6 +117,7 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
             await HandleAnsibleDebugSessionAsync(
                 pipeline,
                 new NetworkStream(ansibleClient, ownsSocket: false),
+                logPath,
                 linkedCts.Token);
         }
         catch (OperationCanceledException)
@@ -109,19 +126,27 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
         }
     }
 
-    private async Task HandleAnsibleDebugSessionAsync(
+    private static string GenerateToken()
+    {
+        Span<byte> tokenBytes = stackalloc byte[32];
+        Random.Shared.NextBytes(tokenBytes);
+        return Convert.ToHexString(tokenBytes);
+    }
+
+    private static async Task HandleAnsibleDebugSessionAsync(
         AsyncPipeline pipeline,
         NetworkStream ansibleClient,
+        string? logPath,
         CancellationToken cancellationToken)
     {
         FileStream? logStream = null;
         StreamWriter? logger = null;
         try
         {
-            if (!string.IsNullOrWhiteSpace(PSRemotingLogPath))
+            if (logPath is not null)
             {
                 logStream = new FileStream(
-                    PSRemotingLogPath,
+                    logPath,
                     FileMode.Append,
                     FileAccess.Write,
                     FileShare.Read);
@@ -135,6 +160,7 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
             pipeline.WriteVerbose($"PowerShell Debugger Listener started on port {listenerPort}");
 
             string token = GenerateToken();
+            pipeline.WriteVerbose($"Generated connection token: {token}");
 
             // Provide the metadata needed by the ansible client to give to the
             // remote PowerShell instance so it can connect back to us.
@@ -148,14 +174,27 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
                 pipeline.WriteVerbose("Waiting for remote PowerShell connection...");
                 using TcpClient client = await listener.AcceptTcpClientAsync(cancellationToken);
 
-                await HandleRemotePowerShellSessionAsync(
-                    pipeline,
-                    client,
-                    logger,
-                    token,
-                    cancellationToken);
-
-                pipeline.WriteVerbose("Remote PowerShell session ended");
+                try
+                {
+                    await HandleRemotePowerShellSessionAsync(
+                        pipeline,
+                        client,
+                        logger,
+                        token,
+                        cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    pipeline.WriteVerbose($"Exception caught while handling remote PowerShell session: {e.Message}");
+                }
+                finally
+                {
+                    pipeline.WriteVerbose("Remote PowerShell session ended");
+                }
             }
         }
         finally
@@ -165,7 +204,7 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
         }
     }
 
-    private async Task HandleRemotePowerShellSessionAsync(
+    private static async Task HandleRemotePowerShellSessionAsync(
         AsyncPipeline pipeline,
         TcpClient client,
         StreamWriter? logger,
@@ -197,9 +236,12 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
             return;
         }
 
-        // PSES does not support a socket as a target but it does
-        // support named pipes so we use that and proxy the data.
-        string pipeName = $"MyPipe-{Guid.NewGuid()}";
+        // PSES does not support a socket as a target but it does support named
+        // pipes so we use that and proxy the data.
+        // Named pipes on POSIX is a UDS which is limited to 108 chars so we
+        // slim the GUID as much as we can.
+        string pipeId = Guid.NewGuid().ToString().Replace("-", "");
+        string pipeName = $"AnsibleTest-{pipeId}";
         using NamedPipeServerStream pipe = new(
             pipeName,
             PipeDirection.InOut,
@@ -218,8 +260,9 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
         Task finishedTask = await Task.WhenAny(waitForPipeTask, startTask);
         if (finishedTask == startTask)
         {
-            pipeline.WriteVerbose("VSCode failed to attach to Pipe, skipping debug session");
+            pipeline.WriteVerbose($"VSCode failed to attach to pipe");
             await finishedTask;
+
             return;
         }
         else
@@ -271,13 +314,6 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
         }
     }
 
-    private static string GenerateToken()
-    {
-        Span<byte> tokenBytes = stackalloc byte[32];
-        Random.Shared.NextBytes(tokenBytes);
-        return Convert.ToHexString(tokenBytes);
-    }
-
     private static async Task WaitForClientDisconnectAsync(
         Socket clientSock,
         AsyncPipeline pipeline,
@@ -306,6 +342,7 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
         }
         finally
         {
+            pipeline.WriteVerbose("Client has disconnected, stopping debug session");
             parentCancellation.Cancel();
         }
     }
@@ -356,6 +393,7 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
             if (logWriter is not null)
             {
                 await logWriter.WriteLineAsync(lineMem, cancellationToken);
+                await logWriter.FlushAsync(cancellationToken);
             }
 
             await writer.WriteLineAsync(lineMem, cancellationToken);
