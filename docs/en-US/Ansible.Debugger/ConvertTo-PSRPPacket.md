@@ -4,7 +4,7 @@ external help file: Ansible.Debugger.dll-Help.xml
 HelpUri: https://www.github.com/jborean93/PowerShell-Ansible.Debugger/blob/main/docs/en-US/Ansible.Debugger/ConvertTo-PSRPPacket.md
 Locale: en-AU
 Module Name: Ansible.Debugger
-ms.date: 02/13/2026
+ms.date: 02/16/2026
 PlatyPS schema version: 2024-05-01
 title: ConvertTo-PSRPPacket
 ---
@@ -55,14 +55,6 @@ Parses PSRP packets and formats them into human-readable output with color codin
 
 ### -InputObject
 
-The PSRP packet strings to parse. Each string should be a complete XML packet from the PowerShell Remoting Protocol.
-Empty or whitespace-only lines are automatically skipped.
-The PSRP packet strings to parse.
-Each string should be a complete XML packet from the PowerShell Remoting Protocol.
-Empty or whitespace-only lines are automatically skipped.
-The PSRP packet strings to parse.
-Each string should be a complete XML packet from the PowerShell Remoting Protocol.
-Empty or whitespace-only lines are automatically skipped.
 The PSRP packet strings to parse.
 Each string should be a complete XML packet from the PowerShell Remoting Protocol.
 Empty or whitespace-only lines are automatically skipped.

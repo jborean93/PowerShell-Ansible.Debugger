@@ -122,7 +122,8 @@ public abstract class AsyncPSCmdlet : PSCmdlet, IDisposable
                         scriptRecord.ScriptBlock,
                         scriptRecord.ArgumentList,
                         scriptRecord.ReturnType,
-                        scriptRecord.CompletionSource);
+                        scriptRecord.CompletionSource,
+                        scriptRecord.CancellationToken);
 
                     break;
             }
@@ -135,16 +136,28 @@ public abstract class AsyncPSCmdlet : PSCmdlet, IDisposable
         string script,
         object?[] argumentList,
         Type returnType,
-        TaskCompletionSource<object?> tcs)
+        TaskCompletionSource<object?> tcs,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            ScriptBlock scriptBlock = ScriptBlock.Create(script);
+            using PowerShell ps = PowerShell.Create(RunspaceMode.CurrentRunspace);
 
-            // As this is hooked up to the current runspace a StopProcessing
-            // signal will be sent to this pipeline and we don't need to handle
-            // it ourselves.
-            object? result = scriptBlock.InvokeReturnAsIs(argumentList);
+            // This is the cancellation token from the async call and isn't
+            // always the one hooked up to the pipeline stop signal. If set
+            // we want it to call BeginStop and not Stop so it doesn't block.
+            using var _ = cancellationToken.Register(() => ps.BeginStop((r) => ps.EndStop(r), null));
+
+            ps.AddScript(script);
+            foreach (object? arg in argumentList)
+            {
+                ps.AddArgument(arg);
+            }
+
+            // Either the caller's cancellationToken will call BeginStop or the
+            // cmdlet pipeline will trigger the runspace to stop so we can just
+            // call Invoke() here.
+            object? result = ps.Invoke();
             object? convertedResult = LanguagePrimitives.ConvertTo(result, returnType);
             tcs.TrySetResult(convertedResult);
         }
@@ -170,7 +183,7 @@ internal enum AsyncPipelineType
 
 internal record OutputRecord(object? Data, bool EnumerateCollection, TaskCompletionSource? CompletionSource = null);
 internal record ShouldProcessRecord(string Target, string Action, TaskCompletionSource<bool> CompletionSource);
-internal record ScriptRecord(string ScriptBlock, object?[] ArgumentList, Type ReturnType, TaskCompletionSource<object?> CompletionSource);
+internal record ScriptRecord(string ScriptBlock, object?[] ArgumentList, Type ReturnType, TaskCompletionSource<object?> CompletionSource, CancellationToken CancellationToken);
 
 public sealed class AsyncPipeline
 {
@@ -285,11 +298,9 @@ public sealed class AsyncPipeline
         CancellationToken cancellationToken = default)
     {
         TaskCompletionSource<object?> tcs = new();
-        using var _ = cancellationToken.Register(() => tcs.TrySetCanceled());
-
         WritePipeline(
             AsyncPipelineType.ScriptBlock,
-            new ScriptRecord(script, argumentList ?? [], typeof(T), tcs));
+            new ScriptRecord(script, argumentList ?? [], typeof(T), tcs, cancellationToken));
 
         // InvokeScriptReturnAsIs will handle conversion to T for us.
         return (T)(await tcs.Task)!;

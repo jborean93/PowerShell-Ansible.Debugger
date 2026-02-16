@@ -5,7 +5,7 @@ HelpInfoUri: https://www.github.com/jborean93/PowerShell-Ansible.Debugger/blob/m
 Locale: en-AU
 Module Guid: 2788ed6f-2c29-4a26-8c5b-4e93c6cac0ec
 Module Name: Ansible.Debugger
-ms.date: 02/13/2026
+ms.date: 02/16/2026
 PlatyPS schema version: 2024-05-01
 title: Ansible.Debugger Module
 ---

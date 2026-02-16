@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Management.Automation;
 
 namespace Ansible.Debugger.Commands;
@@ -8,6 +9,8 @@ namespace Ansible.Debugger.Commands;
 [OutputType(typeof(string))]
 public sealed class FormatPSRPPacketCommand : PSCmdlet
 {
+    private PSRPFormatter? _formatter;
+
     [Parameter(ValueFromPipeline = true, Mandatory = true)]
     public OutOfProcPacket[] Packet { get; set; } = [];
 
@@ -15,11 +18,18 @@ public sealed class FormatPSRPPacketCommand : PSCmdlet
     [Alias("NoColour")]
     public SwitchParameter NoColor { get; set; }
 
+    protected override void BeginProcessing()
+    {
+        _formatter = new PSRPFormatter(SessionState, NoColor);
+    }
+
     protected override void ProcessRecord()
     {
+        Debug.Assert(_formatter is not null, "_formatter should have been initialized in BeginProcessing");
+
         foreach (OutOfProcPacket item in Packet)
         {
-            string formattedString = item.ToFormattedString(noColor: NoColor);
+            string formattedString = _formatter.FormatOutOfProcPacket(item);
             WriteObject(formattedString);
         }
     }
@@ -36,6 +46,7 @@ public sealed class ConvertToPSRPPacketCommand : PSCmdlet
         Position = 0,
         ValueFromPipeline = true
     )]
+    [AllowEmptyString]
     public string[] InputObject { get; set; } = [];
 
     protected override void ProcessRecord()

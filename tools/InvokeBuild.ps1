@@ -227,6 +227,7 @@ task CoverageReport {
     $reportArgs = @(
         "-reports:$coveragePath"
         "-targetdir:$reportPath"
+        '-filefilters:-*.g.cs'  # Filter out source generated files
         '-reporttypes:Html_Dark;JsonSummary'
     )
     reportgenerator @reportArgs

@@ -4,7 +4,7 @@ external help file: Ansible.Debugger.dll-Help.xml
 HelpUri: https://www.github.com/jborean93/PowerShell-Ansible.Debugger/blob/main/docs/en-US/Ansible.Debugger/Format-PSRPPacket.md
 Locale: en-AU
 Module Name: Ansible.Debugger
-ms.date: 02/13/2026
+ms.date: 02/16/2026
 PlatyPS schema version: 2024-05-01
 title: Format-PSRPPacket
 ---
@@ -60,13 +60,6 @@ Formats PSRP packets without ANSI color codes for plain text output.
 
 ### -NoColor
 
-Disables ANSI color codes in the output. Use this when redirecting to a file or when color output is not desired.
-Disables ANSI color codes in the output.
-Use this when redirecting to a file or when color output is not desired.
-Disables ANSI color codes in the output.
-Use this when redirecting to a file or when color output is not desired.
-Disables ANSI color codes in the output.
-Use this when redirecting to a file or when color output is not desired.
 Disables ANSI color codes in the output.
 Use this when redirecting to a file or when color output is not desired.
 
@@ -90,13 +83,6 @@ HelpMessage: ''
 
 ### -Packet
 
-The PSRP packet objects to format. Accepts pipeline input from `ConvertTo-PSRPPacket`.
-The PSRP packet objects to format.
-Accepts pipeline input from `ConvertTo-PSRPPacket`.
-The PSRP packet objects to format.
-Accepts pipeline input from `ConvertTo-PSRPPacket`.
-The PSRP packet objects to format.
-Accepts pipeline input from `ConvertTo-PSRPPacket`.
 The PSRP packet objects to format.
 Accepts pipeline input from `ConvertTo-PSRPPacket`.
 

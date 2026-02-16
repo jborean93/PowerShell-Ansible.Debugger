@@ -17,7 +17,7 @@ public sealed class PwshLaunchConfiguration : LaunchConfiguration
 {
     public override string Type { get; set; } = "PowerShell";
 
-    public string Cwd { get; set; } = string.Empty;
+    public string? Cwd { get; set; }
     public string Script { get; set; } = string.Empty;
 }
 
@@ -28,6 +28,7 @@ public sealed class PythonModuleLaunchConfiguration : LaunchConfiguration
     public string Module { get; set; } = string.Empty;
     public string[] Args { get; set; } = [];
     public string Console { get; set; } = string.Empty;
+    public string? Cwd { get; set; }
 }
 
 [JsonDerivedType(typeof(StartDebuggingServerReadyAction))]

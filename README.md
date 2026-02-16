@@ -1,6 +1,6 @@
 # PowerShell Ansible.Debugger
 
-[![Test workflow](https://github.com/jborean93/PowerShell-Ansible.Debugger/workflows/Test%20PowerShell-Ansible.Debugger/badge.svg)](https://github.com/jborean93/PowerShell-Ansible.Debugger/actions/workflows/ci.yml)
+[![Test workflow](https://github.com/jborean93/PowerShell-Ansible.Debugger/workflows/Test%20Ansible.Debugger/badge.svg)](https://github.com/jborean93/PowerShell-Ansible.Debugger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://github.com/jborean93/PowerShell-Ansible.Debugger/blob/main/LICENSE)
 
 PowerShell module for debugging PowerShell based Ansible modules.
