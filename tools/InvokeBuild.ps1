@@ -235,8 +235,8 @@ task CoverageReport {
         throw "reportgenerator failed with RC of $LASTEXITCODE"
     }
 
-    $resultPath = [Path]::Combine($reportPath, "Summary.json")
-    Format-CoverageInfo -Path $resultPath
+    $coverageScript = [Path]::Combine($PSScriptRoot, 'CoverageReport.ps1')
+    & $coverageScript -Path $coveragePath
 }
 
 #endregion Test

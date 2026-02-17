@@ -3,7 +3,10 @@ using System.Text.Json.Serialization;
 
 namespace Ansible.Debugger;
 
-public readonly record struct DebugPayload(int RunspaceId, string Name, Dictionary<string, string>[] PathMapping);
+public readonly record struct DebugPayload(
+    [property: JsonRequired] int RunspaceId,
+    [property: JsonRequired] string Name,
+    [property: JsonRequired] Dictionary<string, string>[] PathMapping);
 
 public readonly record struct ListenerConfig(int Pid, string Host, int Port, string Token)
 {

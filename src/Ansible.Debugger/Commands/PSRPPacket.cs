@@ -20,7 +20,7 @@ public sealed class FormatPSRPPacketCommand : PSCmdlet
 
     protected override void BeginProcessing()
     {
-        _formatter = new PSRPFormatter(SessionState, NoColor);
+        _formatter = new PSRPFormatter(NoColor);
     }
 
     protected override void ProcessRecord()
