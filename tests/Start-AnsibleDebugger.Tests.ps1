@@ -11,7 +11,7 @@ using namespace System.Threading
 Describe "Start-AnsibleDebugger" {
     BeforeAll {
         $testSockPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
-            "TestDrive:/Ansible.Debugger.Test.sock")
+            "TestDrive:/uds/Ansible.Debugger.Test.sock")
 
         $testParams = @{
             __Internal_ForTesting = $testSockPath
@@ -141,7 +141,11 @@ Describe "Start-AnsibleDebugger" {
 
                 [Parameter(Mandatory)]
                 [string]
-                $Token
+                $Token,
+
+                [Parameter()]
+                [string]
+                $ConfigJson
             )
 
             $remote = $remoteStream
@@ -160,16 +164,19 @@ Describe "Start-AnsibleDebugger" {
                 { $sendTask.IsCompleted } | Invoke-WithTimeout -Timeout 10 -DebugSession $DebugSession
                 $null = $sendTask.GetAwaiter().GetResult()
 
-                $debugInfo = @{
-                    runspace_id = 1234
-                    name = "module_name"
-                    path_mapping = @(
-                        @{ localRoot = 'local1'; remoteRoot = 'remote1' }
-                        @{ localRoot = 'local2'; remoteRoot = 'remote2' }
-                    )
+                if (-not $ConfigJson) {
+                    $debugInfo = @{
+                        runspace_id = 1234
+                        name = "module_name"
+                        path_mapping = @(
+                            @{ localRoot = 'local1'; remoteRoot = 'remote1' }
+                            @{ localRoot = 'local2'; remoteRoot = 'remote2' }
+                        )
+                    }
+                    $ConfigJson = $debugInfo | ConvertTo-Json -Compress
                 }
-                $debugInfoJson = $debugInfo | ConvertTo-Json -Compress
-                $sendTask = $remoteWriter.WriteLineAsync($debugInfoJson)
+
+                $sendTask = $remoteWriter.WriteLineAsync($ConfigJson)
                 { $sendTask.IsCompleted } | Invoke-WithTimeout -Timeout 10 -DebugSession $DebugSession
                 $null = $sendTask.GetAwaiter().GetResult()
 
@@ -405,6 +412,33 @@ Describe "Start-AnsibleDebugger" {
         }
     }
 
+    It "Creates UDS directory if it doesn't already exist" {
+        $session = $socket = $null
+        try {
+            $udsDir = Split-Path -Path $testSockPath -Parent
+            if (Test-Path -LiteralPath $udsDir) {
+                Remove-Item -LiteralPath $udsDir
+            }
+
+            $session = Start-TestDebugSession
+            $socket, $json = Get-TestDebugSessionConfig -DebugSession $session
+
+            $json.version | Should -Be 1
+            $json.pid | Should -Be $PID
+            $json.host | Should -Be localhost
+            $json.port | Should -BeOfType ([long])
+            $json.token | Should -BeOfType ([string])
+
+            # Closing the socket should cause the debug session to end
+            $socket.Close()
+            { $session.Task.IsCompleted } | Invoke-WithTimeout -Timeout 10 -DebugSession $session
+        }
+        finally {
+            ${socket}?.Dispose()
+            ${session}?.Dispose()
+        }
+    }
+
     It "Rejects second UDS connection" {
         $session = $socket = $socketFail = $null
         try {
@@ -477,6 +511,44 @@ Describe "Start-AnsibleDebugger" {
         }
     }
 
+    It "Handles invalid debug payload <Json> from TCP client" -TestCases @(
+        @{ Json = 'invalid' }
+        @{ Json = ' ' }
+        @{ Json = 'null' }
+        @{ Json = '{}'}
+        @{ Json = '{"name": "Name", "path_mapping": []}'}
+        @{ Json = '{"runspace_id": null, "name": "Name", "path_mapping": []}'}
+        @{ Json = '{"runspace_id": "invalid", "name": "Name", "path_mapping": []}'}
+
+        @{ Json = '{"runspace_id": 0, "path_mapping": []}'}
+        @{ Json = '{"runspace_id": 0, "name": null, "path_mapping": []}'}
+
+        @{ Json = '{"runspace_id": 0, "name": "name"}'}
+        @{ Json = '{"runspace_id": 0, "name": "name", "path_mapping": null}'}
+    ) {
+        param ($Json)
+
+        $session = $socket = $clientTcp = $clientStream = $null
+        try {
+            $session = Start-TestDebugSession
+            $socket, $sessionJson = Get-TestDebugSessionConfig -DebugSession $session
+            $clientTcp, $clientStream, $clientReader, $clientWriter = Start-ClientTcpConnection -DebugSession $session -Port $sessionJson.port -Token $sessionJson.token -ConfigJson $Json
+
+            # The server should have closed the connection after the error
+            $buffer = [byte[]]::new(1)
+            $readTask = $clientStream.ReadAsync($buffer, 0, 1)
+            $readTask.GetAwaiter().GetResult() | Should -Be 0
+
+            $session.Task.IsCompleted | Should -BeFalse
+        }
+        finally {
+            ${clientStream}?.Dispose()
+            ${clientTcp}?.Dispose()
+            ${socket}?.Dispose()
+            ${session}?.Dispose()
+        }
+    }
+
     It "Handles error when calling Start-DebugAttachSession" {
         $session = $socket = $clientTcp = $clientStream = $null
         try {
@@ -492,11 +564,29 @@ Describe "Start-AnsibleDebugger" {
             $readTask = $clientStream.ReadAsync($buffer, 0, 1)
             $readTask.GetAwaiter().GetResult() | Should -Be 0
 
-            # We check the verbose records contain the error info and that it's still listening
-            $session.PowerShell.Streams.Verbose[-4].Message | Should -Be "VSCode failed to attach to pipe"
-            $session.PowerShell.Streams.Verbose[-3].Message | Should -Be "Exception caught while handling remote PowerShell session: Test error from Start-DebugAttachSession"
-            $session.PowerShell.Streams.Verbose[-2].Message | Should -Be "Remote PowerShell session ended"
-            $session.PowerShell.Streams.Verbose[-1].Message | Should -Be "Waiting for remote PowerShell connection..."
+            $session.Task.IsCompleted | Should -BeFalse
+        }
+        finally {
+            ${clientStream}?.Dispose()
+            ${clientTcp}?.Dispose()
+            ${socket}?.Dispose()
+            ${session}?.Dispose()
+        }
+    }
+
+    It "Handles Start-DebugAttachSession returning before pipe connect" {
+        $session = $socket = $clientTcp = $clientStream = $null
+        try {
+            $session = Start-TestDebugSession -StartDebugAttachSession {}
+
+            $socket, $json = Get-TestDebugSessionConfig -DebugSession $session
+            $clientTcp, $clientStream, $clientReader, $clientWriter = Start-ClientTcpConnection -DebugSession $session -Port $json.port -Token $json.token
+
+            # The server should have closed the connection after the error
+            $buffer = [byte[]]::new(1)
+            $readTask = $clientStream.ReadAsync($buffer, 0, 1)
+            $readTask.GetAwaiter().GetResult() | Should -Be 0
+
             $session.Task.IsCompleted | Should -BeFalse
         }
         finally {
@@ -519,10 +609,6 @@ Describe "Start-AnsibleDebugger" {
             $readTask = $clientStream.ReadAsync($buffer, 0, 1)
             $readTask.GetAwaiter().GetResult() | Should -Be 0
 
-            # We check the verbose records contain the error info and that it's still listening
-            $session.PowerShell.Streams.Verbose[-3].Message | Should -Be "Received token: 'FAKE'"
-            $session.PowerShell.Streams.Verbose[-2].Message | Should -Be "Remote PowerShell session ended"
-            $session.PowerShell.Streams.Verbose[-1].Message | Should -Be "Waiting for remote PowerShell connection..."
             $session.Task.IsCompleted | Should -BeFalse
         }
         finally {

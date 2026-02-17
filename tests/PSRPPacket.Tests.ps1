@@ -1,6 +1,53 @@
+using namespace System.Buffers.Binary
 using namespace System.IO
+using namespace System.Text
 
 . ([Path]::Combine($PSScriptRoot, 'common.ps1'))
+
+Function global:Get-PSRPPacket {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [Ansible.Debugger.PSRPDestination]
+        $Destination,
+
+        [Parameter(Mandatory)]
+        [Ansible.Debugger.PSRPMessageType]
+        $MessageType,
+
+        [Parameter(Mandatory)]
+        [string]
+        $Data
+    )
+
+    $dataBytes = [Encoding]::UTF8.GetBytes($Data)
+    $msgBytes = [byte[]]::new(21 + 40 + $dataBytes.Length)
+
+    # Fragment
+    [BinaryPrimitives]::WriteInt64BigEndian(
+        [ArraySegment[byte]]::new($msgBytes, 0, 8),
+        1)  # ObjectId
+    [BinaryPrimitives]::WriteInt64BigEndian(
+        [ArraySegment[byte]]::new($msgBytes, 8, 8),
+        0)  # FragmentId
+    $msgBytes[16] = 3  # Start + End
+    [BinaryPrimitives]::WriteInt32BigEndian(
+        [ArraySegment[byte]]::new($msgBytes, 17, 4),
+        (40 + $dataBytes.Length))
+
+    # Message
+    [BinaryPrimitives]::WriteInt32LittleEndian(
+        [ArraySegment[byte]]::new($msgBytes, 21, 4),
+        $Destination)
+    [BinaryPrimitives]::WriteInt32LittleEndian(
+        [ArraySegment[byte]]::new($msgBytes, 25, 4),
+        $MessageType)
+    # RPID and PID in the mock packet are all zeros so we can skip
+    # writing them since the buffer is initialized to zeroes
+    [Array]::Copy($dataBytes, 0, $msgBytes, 61, $dataBytes.Length)
+
+    "<Data Stream='Default' PSGuid='00000000-0000-0000-0000-000000000000'>$([Convert]::ToBase64String($msgBytes))</Data>"
+}
 
 Describe "ConvertTo-PSRPPacket" {
     It "Parses packet with single message" {
@@ -23,6 +70,8 @@ Describe "ConvertTo-PSRPPacket" {
         $packet.Messages[0].RunspacePoolId | Should -Be "a6fa5eaf-2efa-4b3e-806f-7be252a39be9"
         $packet.Messages[0].PipelineId | Should -Be "6e6e7727-08b7-4440-855f-6e417c17511c"
         $packet.Messages[0].Data | Should -BeLike '<Obj RefId="0">*'
+
+        $packet.Raw | Should -BeLike "<Data Stream='Default' PSGuid='6e6e7727-08b7-4440-855f-6e417c17511c'>*</Data>"
     }
 
     It "Parses packet with multiple messages" {
@@ -56,6 +105,8 @@ Describe "ConvertTo-PSRPPacket" {
         $packet.Messages[1].RunspacePoolId | Should -Be a6fa5eaf-2efa-4b3e-806f-7be252a39be9
         $packet.Messages[1].PipelineId | Should -Be "00000000-0000-0000-0000-000000000000"
         $packet.Messages[1].Data | Should -BeLike '<Obj RefId="0">*'
+
+        $packet.Raw | Should -BeLike "<Data Stream='Default' PSGuid='00000000-0000-0000-0000-000000000000'>*</Data>"
     }
 
     It "Parses packets across multiple fragments" {
@@ -109,6 +160,40 @@ Describe "ConvertTo-PSRPPacket" {
         $packet.Stream | Should -Be Default
         $packet.Fragments | Should -HaveCount 0
         $packet.Messages | Should -HaveCount 0
+        $packet.Raw | Should -Be "<DataAck Stream='Default' PSGuid='00000000-0000-0000-0000-000000000000' />"
+    }
+
+    It "Missing Stream value" {
+        $packet = "<DataAck PSGuid='00000000-0000-0000-0000-000000000000' />" | ConvertTo-PSRPPacket
+        $packet | Should -HaveCount 1
+
+        $packet.Type | Should -Be DataAck
+        $packet.PSGuid | Should -Be 00000000-0000-0000-0000-000000000000
+        $packet.Stream | Should -BeNullOrEmpty
+        $packet.Fragments | Should -HaveCount 0
+        $packet.Messages | Should -HaveCount 0
+        $packet.Raw | Should -Be "<DataAck PSGuid='00000000-0000-0000-0000-000000000000' />"
+    }
+
+    It "Message data contains UTF-8 BOM" {
+        $rawPacket = Get-PSRPPacket -Destination Client -MessageType PipelineOutput -Data "$([char]0xFEFF)<S>a</S>"
+        $packet = $rawPacket | ConvertTo-PSRPPacket
+
+        $packet.Type | Should -Be Data
+        $packet.PSGuid | Should -Be 00000000-0000-0000-0000-000000000000
+        $packet.Stream | Should -Be Default
+        $packet.Fragments | Should -HaveCount 1
+        $packet.Fragments[0].ObjectId | Should -Be 1
+        $packet.Fragments[0].FragmentId | Should -Be 0
+        $packet.Fragments[0].Start | Should -BeTrue
+        $packet.Fragments[0].End | Should -BeTrue
+        $packet.Messages | Should -HaveCount 1
+        $packet.Messages[0].Destination | Should -Be Client
+        $packet.Messages[0].MessageType | Should -Be PipelineOutput
+        $packet.Messages[0].RunspacePoolId | Should -Be 00000000-0000-0000-0000-000000000000
+        $packet.Messages[0].PipelineId | Should -Be 00000000-0000-0000-0000-000000000000
+        $packet.Messages[0].Data | Should -Be "<S>a</S>"
+        $packet.Messages[0].Data.Length | Should -Be 8 # Excludes the 3 byte UTF-8 BOM
     }
 
     It "Emits error for invalid XML" {
@@ -150,17 +235,6 @@ Describe "ConvertTo-PSRPPacket" {
         $err[0].FullyQualifiedErrorId | Should -Be "ParseError,Ansible.Debugger.Commands.ConvertToPSRPPacketCommand"
         $err[0].CategoryInfo.Category | Should -Be InvalidData
     }
-
-    It "Emits error for missing Stream value" {
-        $err = $null
-        $packet = "<DataAck PSGuid='00000000-0000-0000-0000-000000000000' />" | ConvertTo-PSRPPacket -ErrorAction SilentlyContinue -ErrorVariable err
-        $packet | Should -HaveCount 0
-
-        $err | Should -HaveCount 1
-        [string]$err[0] | Should -Match "Failed to parse line '.*': Missing Stream attribute"
-        $err[0].FullyQualifiedErrorId | Should -Be "ParseError,Ansible.Debugger.Commands.ConvertToPSRPPacketCommand"
-        $err[0].CategoryInfo.Category | Should -Be InvalidData
-    }
 }
 
 Describe "Format-PSRPPacket" {
@@ -170,9 +244,20 @@ Describe "Format-PSRPPacket" {
         }
     }
 
-    It "Formats Data to Client packet with data and color" {
-        $packet = "<Data Stream='Default' PSGuid='00000000-0000-0000-0000-000000000000'>AAAAAAAAAVcAAAAAAAAAAAMAAABnAQAAAAUQAgB4nD8P1HoVRqyNcsvELiJdAAAAAAAAAAAAAAAAAAAAAO+7vzxPYmogUmVmSWQ9IjAiPjxNUz48STMyIE49IlJ1bnNwYWNlU3RhdGUiPjM8L0kzMj48L01TPjwvT2JqPg==</Data>"
-        $Color = $PSStyle.Foreground.BrightYellow
+    It "Formats Data to <Destination> packet with data and color" -TestCases @(
+        @{ Destination = 'Client'; Color = $PSStyle.Foreground.BrightYellow }
+        @{ Destination = 'Server'; Color = $PSStyle.Foreground.BrightCyan }
+    ) {
+        param ($Destination, $Color)
+
+        $clixml = @(
+            '<Obj RefId="0">'
+            '  <MS>'
+            '    <I32 N="RunspaceState">3</I32>'
+            '  </MS>'
+            '</Obj>'
+        ) -join ([Environment]::NewLine)
+        $packet = Get-PSRPPacket -Destination $Destination -MessageType RunspacePoolState -Data $clixml
 
         $actual = $packet | ConvertTo-PSRPPacket | Format-PSRPPacket
         $actual | Should -Be (
@@ -181,11 +266,11 @@ Describe "Format-PSRPPacket" {
                 "$Color║`e[0m `e[90mPSGuid:`e[0m `e[33m00000000-0000-0000-0000-000000000000`e[0m"
                 "$Color║`e[0m `e[90mStream:`e[0m `e[32mDefault`e[0m"
                 "$Color╠══`e[0m `e[96mFragments`e[0m"
-                "$Color║`e[0m   `e[90mObj=`e[0m343 `e[90mFrag=`e[0m0 `e[90mStart=`e[0mTrue `e[90mEnd=`e[0mTrue"
+                "$Color║`e[0m   `e[90mObj=`e[0m1 `e[90mFrag=`e[0m0 `e[90mStart=`e[0mTrue `e[90mEnd=`e[0mTrue"
                 "$Color╠══`e[0m `e[96mMessages`e[0m"
-                "$Color║`e[0m   `e[90mDestination:`e[0m ${Color}Client`e[0m"
+                "$Color║`e[0m   `e[90mDestination:`e[0m ${Color}$Destination`e[0m"
                 "$Color║`e[0m   `e[90mMessageType:`e[0m `e[34mRunspacePoolState`e[0m"
-                "$Color║`e[0m   `e[90mRPID:`e[0m `e[33m0f3f9c78-7ad4-4615-ac8d-72cbc42e225d`e[0m"
+                "$Color║`e[0m   `e[90mRPID:`e[0m `e[33m00000000-0000-0000-0000-000000000000`e[0m"
                 "$Color║`e[0m   `e[90mPID:`e[0m  `e[33m00000000-0000-0000-0000-000000000000`e[0m"
                 "$Color║`e[0m   `e[90mData:`e[0m"
                 "$Color║`e[0m     `e[90m<`e[35mObj RefId`e[90m=`e[32m`"`e[0m`e[32m0`e[32m`"`e[0m`e[90m>`e[0m"
@@ -209,6 +294,7 @@ Describe "Format-PSRPPacket" {
         @{ Type = "SignalAck"; Color = "`e[34m" }
         @{ Type = "Close"; Color = "`e[31m" }
         @{ Type = "CloseAck"; Color = "`e[31m" }
+        @{ Type = "Unknown"; Color = "`e[36m" }
     ) {
         param ($Type, $Color)
 
@@ -355,6 +441,149 @@ Describe "Format-PSRPPacket" {
                 '║     </Obj>'
                 '║   State: Stopped'
                 '║   ErrorRecord: The pipeline has been stopped.'
+                '╚═══'
+                ''
+            ) -join ([Environment]::NewLine)
+        )
+    }
+
+    It "RunspacePoolState does not contain expected state" {
+        $clixml = @(
+            '<Obj RefId="1">'
+            '  <MS>'
+            '    <I32 N="UnexpectedField">123</I32>'
+            '  </MS>'
+            '</Obj>'
+        ) -join ([Environment]::NewLine)
+        $rawPacket = Get-PSRPPacket -Destination Client -MessageType RunspacePoolState -Data $clixml
+        $actual = $rawPacket | ConvertTo-PSRPPacket | Format-PSRPPacket @common
+
+        $actual | Should -Be (
+            @(
+                '╔═══ Data ═══'
+                '║ PSGuid: 00000000-0000-0000-0000-000000000000'
+                '║ Stream: Default'
+                '╠══ Fragments'
+                '║   Obj=1 Frag=0 Start=True End=True'
+                '╠══ Messages'
+                '║   Destination: Client'
+                '║   MessageType: RunspacePoolState'
+                '║   RPID: 00000000-0000-0000-0000-000000000000'
+                '║   PID:  00000000-0000-0000-0000-000000000000'
+                '║   Data:'
+                '║     <Obj RefId="1">'
+                '║       <MS>'
+                '║         <I32 N="UnexpectedField">123</I32>'
+                '║       </MS>'
+                '║     </Obj>'
+                '╚═══'
+                ''
+            ) -join ([Environment]::NewLine)
+        )
+    }
+
+    It "RunspacePoolState contains null for state" {
+        $rawPacket = Get-PSRPPacket -Destination Client -MessageType RunspacePoolState -Data '<Nil />'
+        $actual = $rawPacket | ConvertTo-PSRPPacket | Format-PSRPPacket @common
+
+        $actual | Should -Be (
+            @(
+                '╔═══ Data ═══'
+                '║ PSGuid: 00000000-0000-0000-0000-000000000000'
+                '║ Stream: Default'
+                '╠══ Fragments'
+                '║   Obj=1 Frag=0 Start=True End=True'
+                '╠══ Messages'
+                '║   Destination: Client'
+                '║   MessageType: RunspacePoolState'
+                '║   RPID: 00000000-0000-0000-0000-000000000000'
+                '║   PID:  00000000-0000-0000-0000-000000000000'
+                '║   Data:'
+                '║     <Nil />'
+                '╚═══'
+                ''
+            ) -join ([Environment]::NewLine)
+        )
+    }
+
+    It "RunspacePoolState contains invalid CLIXML" {
+        $rawPacket = Get-PSRPPacket -Destination Client -MessageType RunspacePoolState -Data 'invalid'
+        $actual = $rawPacket | ConvertTo-PSRPPacket | Format-PSRPPacket @common
+
+        $actual | Should -Be (
+            @(
+                '╔═══ Data ═══'
+                '║ PSGuid: 00000000-0000-0000-0000-000000000000'
+                '║ Stream: Default'
+                '╠══ Fragments'
+                '║   Obj=1 Frag=0 Start=True End=True'
+                '╠══ Messages'
+                '║   Destination: Client'
+                '║   MessageType: RunspacePoolState'
+                '║   RPID: 00000000-0000-0000-0000-000000000000'
+                '║   PID:  00000000-0000-0000-0000-000000000000'
+                '║   Data:'
+                '║     invalid'
+                '╚═══'
+                ''
+            ) -join ([Environment]::NewLine)
+        )
+    }
+
+    It "RunspacePoolState without exception" {
+        $clixml = @(
+            '<Obj RefId="1">'
+            '  <MS>'
+            '    <I32 N="RunspaceState">0</I32>'
+            '  </MS>'
+            '</Obj>'
+        ) -join ([Environment]::NewLine)
+        $rawPacket = Get-PSRPPacket -Destination Client -MessageType RunspacePoolState -Data $clixml
+        $actual = $rawPacket | ConvertTo-PSRPPacket | Format-PSRPPacket @common
+
+        $actual | Should -Be (
+            @(
+                '╔═══ Data ═══'
+                '║ PSGuid: 00000000-0000-0000-0000-000000000000'
+                '║ Stream: Default'
+                '╠══ Fragments'
+                '║   Obj=1 Frag=0 Start=True End=True'
+                '╠══ Messages'
+                '║   Destination: Client'
+                '║   MessageType: RunspacePoolState'
+                '║   RPID: 00000000-0000-0000-0000-000000000000'
+                '║   PID:  00000000-0000-0000-0000-000000000000'
+                '║   Data:'
+                '║     <Obj RefId="1">'
+                '║       <MS>'
+                '║         <I32 N="RunspaceState">0</I32>'
+                '║       </MS>'
+                '║     </Obj>'
+                '║   State: BeforeOpen'
+                '╚═══'
+                ''
+            ) -join ([Environment]::NewLine)
+        )
+    }
+
+    It "Formats normal pipeline output" {
+        $rawPacket = Get-PSRPPacket -Destination Client -MessageType PipelineOutput -Data '<S>value</S>'
+        $actual = $rawPacket | ConvertTo-PSRPPacket | Format-PSRPPacket @common
+
+        $actual | Should -Be (
+            @(
+                '╔═══ Data ═══'
+                '║ PSGuid: 00000000-0000-0000-0000-000000000000'
+                '║ Stream: Default'
+                '╠══ Fragments'
+                '║   Obj=1 Frag=0 Start=True End=True'
+                '╠══ Messages'
+                '║   Destination: Client'
+                '║   MessageType: PipelineOutput'
+                '║   RPID: 00000000-0000-0000-0000-000000000000'
+                '║   PID:  00000000-0000-0000-0000-000000000000'
+                '║   Data:'
+                '║     <S>value</S>'
                 '╚═══'
                 ''
             ) -join ([Environment]::NewLine)

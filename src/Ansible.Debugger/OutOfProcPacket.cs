@@ -32,8 +32,7 @@ public readonly record struct OutOfProcPacket(
             throw new InvalidDataException($"Invalid PSGuid value: {psGuidRaw}");
         }
 
-        string stream = element.Attribute("Stream")?.Value
-            ?? throw new InvalidDataException($"Missing Stream attribute");
+        string? stream = element.Attribute("Stream")?.Value;
         PSRPFragment[] fragments = [];
         PSRPMessage[] messages = [];
         if (elementType == "Data")
@@ -118,7 +117,8 @@ public readonly record struct OutOfProcPacket(
     private static PSRPMessage ParseMessage(ReadOnlySpan<byte> buffer)
     {
         ReadOnlySpan<byte> data = buffer[40..];
-        if (data.Length > 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF)
+        Span<byte> utf8Bom = [0xEF, 0xBB, 0xBF];
+        if (data[..3].StartsWith(utf8Bom))
         {
             // Skip UTF-8 BOM if present
             data = data[3..];

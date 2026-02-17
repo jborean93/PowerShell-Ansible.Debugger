@@ -20,24 +20,21 @@ public class PSRPFormatter
     public readonly string BrightCyan = "";
     public readonly string BrightWhite = "";
 
-    public PSRPFormatter(
-        SessionState sessionState,
-        bool noColor)
+    public PSRPFormatter(bool noColor)
     {
-        object? styleRaw = sessionState.PSVariable.GetValue("PSStyle", null);
-        if (styleRaw is PSStyle style && !noColor)
+        if (!noColor)
         {
-            Reset = style.Reset;
-            Red = style.Foreground.Red;
-            Green = style.Foreground.Green;
-            Yellow = style.Foreground.Yellow;
-            Blue = style.Foreground.Blue;
-            Magenta = style.Foreground.Magenta;
-            Cyan = style.Foreground.Cyan;
-            BrightBlack = style.Foreground.BrightBlack;
-            BrightYellow = style.Foreground.BrightYellow;
-            BrightCyan = style.Foreground.BrightCyan;
-            BrightWhite = style.Foreground.BrightWhite;
+            Reset = "\x1b[0m";
+            Red = "\x1b[31m";
+            Green = "\x1b[32m";
+            Yellow = "\x1b[33m";
+            Blue = "\x1b[34m";
+            Magenta = "\x1b[35m";
+            Cyan = "\x1b[36m";
+            BrightBlack = "\x1b[90m";
+            BrightYellow = "\x1b[93m";
+            BrightCyan = "\x1b[96m";
+            BrightWhite = "\x1b[97m";
         }
     }
 
@@ -144,11 +141,6 @@ public class PSRPFormatter
             }
         }
 
-        if (string.IsNullOrWhiteSpace(message.Data))
-        {
-            return sb.ToString();
-        }
-
         // Special handling for messages that could be clearer
         try
         {
@@ -181,8 +173,8 @@ public class PSRPFormatter
             T state = (T)stateValue;
             string stateVal = state.ToString()!;
 
-            object? exception = psObj?.Properties["ExceptionAsErrorRecord"]?.Value;
-            if (exception is not null && exception is PSObject exObj)
+            object? exception = psObj!.Properties["ExceptionAsErrorRecord"]?.Value;
+            if (exception is PSObject exObj)
             {
                 string errorMsg = $"{BrightBlack}ErrorRecord:{Reset} {Red}{exObj}{Reset}";
                 stateVal = $"{Red}{stateVal}\n{errorMsg}";
@@ -215,18 +207,15 @@ public class PSRPFormatter
 """;
 
         object? deserialized = PSSerializer.Deserialize(clixml);
-        if (deserialized is PSObject psObj)
+        if (deserialized is null)
         {
-            psObject = psObj;
+            psObject = null;
+            return false;
+        }
+        else
+        {
+            psObject = PSObject.AsPSObject(deserialized);
             return true;
         }
-        else if (PSObject.AsPSObject(deserialized) is {} psObj2)
-        {
-            psObject = psObj2;
-            return true;
-        }
-
-        psObject = null;
-        return false;
     }
 }

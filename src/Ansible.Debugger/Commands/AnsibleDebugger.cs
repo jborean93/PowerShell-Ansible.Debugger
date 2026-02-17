@@ -227,12 +227,15 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
 
         string debugInfoRaw = await reader.ReadLineAsync(cancellationToken) ?? "";
         pipeline.WriteVerbose($"Received debug request:\n{debugInfoRaw}");
-        DebugPayload? debugInfo = JsonSerializer.Deserialize(
-            debugInfoRaw,
-            DebuggerJsonSerializerContext.Default.DebugPayload);
-        if (debugInfo is null)
+
+        DebugPayload debugInfo;
+        try
         {
-            pipeline.WriteVerbose("Received invalid debug payload from client, skipping");
+            debugInfo = DeserializeDebugPayload(debugInfoRaw);
+        }
+        catch (Exception e)
+        {
+            pipeline.WriteVerbose($"Received invalid debug payload from client: {e.Message}");
             return;
         }
 
@@ -253,7 +256,7 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
         pipeline.WriteVerbose($"Starting VSCode attach to Pipe {pipeName}");
         Task<object?> startTask = pipeline.InvokeScriptAsync<object?>(
             Scripts.StartDebugAttachSession,
-            [ pipeName, debugInfo.Value.RunspaceId, debugInfo.Value.Name, debugInfo.Value.PathMapping ],
+            [ pipeName, debugInfo.RunspaceId, debugInfo.Name, debugInfo.PathMapping ],
             cancellationToken: cancellationToken);
 
         pipeline.WriteVerbose($"Waiting for VSCode to attach to Pipe");
@@ -293,12 +296,12 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
             finishedTask = await Task.WhenAny(taskList);
             if (finishedTask == writeTask)
             {
-                pipeline.WriteVerbose($"VSCode disconnected from Pipe {pipeName} and RunspaceId {debugInfo.Value.RunspaceId}");
+                pipeline.WriteVerbose($"VSCode disconnected from Pipe {pipeName} and RunspaceId {debugInfo.RunspaceId}");
                 client.Close();
             }
             else
             {
-                pipeline.WriteVerbose($"Socket disconnected from Pipe {pipeName} and RunspaceId {debugInfo.Value.RunspaceId}");
+                pipeline.WriteVerbose($"Socket disconnected from Pipe {pipeName} and RunspaceId {debugInfo.RunspaceId}");
                 pipe.Close();
             }
 
@@ -312,6 +315,25 @@ public sealed class StartAnsibleDebuggerCommand : AsyncPSCmdlet
                 pipeline.WriteVerbose($"IOException caught while waiting for task to complete: {e.Message}");
             }
         }
+    }
+
+    private static DebugPayload DeserializeDebugPayload(
+        string json)
+    {
+        DebugPayload debugInfo = JsonSerializer.Deserialize(
+            json,
+            DebuggerJsonSerializerContext.Default.DebugPayload)!;
+
+        if (string.IsNullOrWhiteSpace(debugInfo.Name))
+        {
+            throw new ArgumentException("DebugPayload.name cannot be null, empty string, or string with whitespace only");
+        }
+        if (debugInfo.PathMapping is null)
+        {
+            throw new ArgumentException("DebugPayload.path_mapping cannot be null");
+        }
+
+        return debugInfo;
     }
 
     private static async Task WaitForClientDisconnectAsync(
