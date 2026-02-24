@@ -7,15 +7,16 @@ using namespace System.Reflection
 
 $importModule = Get-Command -Name Import-Module -Module Microsoft.PowerShell.Core
 $moduleName = [Path]::GetFileNameWithoutExtension($PSCommandPath)
+$loaderName = "$moduleName.Loader.LoadContext"
 
 $isReload = $true
-if (-not ('Ansible.Debugger.Shared.LoadContext' -as [type])) {
+if (-not ($loaderName -as [type])) {
     $isReload = $false
 
-    Add-Type -Path ([Path]::Combine($PSScriptRoot, 'bin', 'net8.0', "$moduleName.Shared.dll"))
+    Add-Type -Path ([Path]::Combine($PSScriptRoot, 'bin', 'net8.0', "$moduleName.Loader.dll"))
 }
 
-$mainModule = [Ansible.Debugger.Shared.LoadContext]::Initialize()
+$mainModule = ($loaderName -as [type])::Initialize($moduleName)
 $innerMod = &$importModule -Assembly $mainModule -PassThru:$isReload
 
 if ($innerMod) {

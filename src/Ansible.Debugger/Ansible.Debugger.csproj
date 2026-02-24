@@ -12,7 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../Ansible.Debugger.Shared/Ansible.Debugger.Shared.csproj" />
+    <ProjectReference Include="../Ansible.Debugger.Loader/Ansible.Debugger.Loader.csproj" />
     <PackageReference Include="System.Management.Automation" Version="7.4.0" PrivateAssets="all" />
   </ItemGroup>
 
