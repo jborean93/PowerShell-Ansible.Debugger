@@ -1,19 +1,30 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Management.Automation;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Ansible.Debugger.Commands;
 
-// PowerShell 7.6 (net10.0) introduces PipelineStopToken which does the same
-// thing here. Remove the #else block when net10.0 is the minimum target.
-#if NET10_0_OR_GREATER
-public abstract class AsyncPSCmdlet : PSCmdlet
-{
-#else
 public abstract class AsyncPSCmdlet : PSCmdlet, IDisposable
 {
+    private bool _disposed = false;
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+// PowerShell 7.6 introduces a builtin PipelineStopToken, for older versions we
+// implement our own cancellation stop trigger and its cleanup. Once 7.6 is the
+// baseline we can remove the else block.
+#if NET10_0_OR_GREATER
+    protected virtual void Dispose(bool disposing)
+    {
+    }
+#else
     private CancellationTokenSource _cancelSource = new();
 
     public CancellationToken PipelineStopToken => _cancelSource.Token;
@@ -23,13 +34,20 @@ public abstract class AsyncPSCmdlet : PSCmdlet, IDisposable
         _cancelSource.Cancel();
     }
 
-    public void Dispose()
+    protected virtual void Dispose(bool disposing)
     {
-        _cancelSource.Dispose();
-        GC.SuppressFinalize(this);
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (disposing)
+        {
+            _cancelSource.Dispose();
+        }
+
+        _disposed = true;
     }
-    ~AsyncPSCmdlet()
-        => Dispose();
 #endif
 
     protected override void BeginProcessing()
@@ -112,8 +130,15 @@ public abstract class AsyncPSCmdlet : PSCmdlet, IDisposable
 
                 case AsyncPipelineType.ShouldProcess:
                     ShouldProcessRecord shouldProcess = (ShouldProcessRecord)data!;
-                    bool res = ShouldProcess(shouldProcess.Target, shouldProcess.Action);
-                    shouldProcess.CompletionSource.TrySetResult(res);
+                    try
+                    {
+                        bool res = ShouldProcess(shouldProcess.Target, shouldProcess.Action);
+                        shouldProcess.CompletionSource.TrySetResult(res);
+                    }
+                    catch (Exception ex)
+                    {
+                        shouldProcess.CompletionSource.TrySetException(ex);
+                    }
                     break;
 
                 case AsyncPipelineType.ScriptBlock:
@@ -157,7 +182,7 @@ public abstract class AsyncPSCmdlet : PSCmdlet, IDisposable
             // Either the caller's cancellationToken will call BeginStop or the
             // cmdlet pipeline will trigger the runspace to stop so we can just
             // call Invoke() here.
-            object? result = ps.Invoke();
+            PSObject? result = ps.Invoke().FirstOrDefault();
             object? convertedResult = LanguagePrimitives.ConvertTo(result, returnType);
             tcs.TrySetResult(convertedResult);
         }

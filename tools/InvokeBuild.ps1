@@ -142,6 +142,40 @@ task UnitTests {
     }
 }
 
+task PesterTestAsyncProject {
+    $projectDirs = [Path]::Combine($Manifest.TestPath, 'src')
+    if (-not (Test-Path -LiteralPath $projectDirs)) {
+        Write-Host "No test projects found, skipping" -ForegroundColor Yellow
+        return
+    }
+
+    Get-ChildItem -LiteralPath $projectDirs -Directory | ForEach-Object {
+        $csproj = Get-Item -Path ([Path]::Combine($_.FullName, '*.csproj'))
+        $projectName = $csproj.BaseName
+        $outputDir = [Path]::Combine($Manifest.OutputPath, "TestModules", $projectName)
+        if (Test-Path -LiteralPath $outputDir) {
+            Remove-Item -LiteralPath $outputDir -Recurse -Force
+        }
+        New-Item -Path $outputDir -ItemType Directory -Force | Out-Null
+
+        $publishArgs = @(
+            'publish'
+            '--configuration', 'Release'
+            '--verbosity', 'quiet'
+            '-nologo'
+            '--framework', 'net8.0'
+            '--output', $outputDir
+            $csproj.FullName
+        )
+
+        Write-Host "Publishing test project '$projectName'" -ForegroundColor Cyan
+        dotnet @publishArgs
+        if ($LASTEXITCODE) {
+            throw "Failed to publish test project '$projectName'"
+        }
+    }
+}
+
 task PesterTests {
     $testsPath = [Path]::Combine($Manifest.TestPath, '*.tests.ps1')
     if (-not (Test-Path -Path $testsPath)) {
@@ -243,4 +277,4 @@ task CoverageReport {
 
 task Build -Jobs Clean, BuildManaged, BuildModule, BuildDocs, Package
 
-task Test -Jobs UnitTests, PesterTests, CoverageReport
+task Test -Jobs UnitTests, PesterTestAsyncProject, PesterTests, CoverageReport

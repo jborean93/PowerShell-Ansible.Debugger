@@ -287,7 +287,6 @@ Describe "Start-AnsibleDebugger" {
                     $elapsed = (Get-Date) - $start
                     if ($elapsed.TotalSeconds -gt $Timeout -or $hasFinished) {
 
-
                         if (-not ($DebugSession.Task.IsCompleted) -and $DebugSession.PowerShell.InvokeStateInfo.State -notin @('Stopping', 'Stopped')) {
                             # Stop can block so we try and stop it but wait for 5
                             # seconds before giving up.
