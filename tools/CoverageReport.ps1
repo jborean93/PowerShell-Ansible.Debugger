@@ -374,7 +374,13 @@ function Show-SummaryReport {
     # Calculate dynamic column widths based on console width
     # Fixed columns: " Stmts" + " Miss" + " Branch" + " BrPart" + " Cover"
     #                = 6 + 5 + 7 + 7 + 8 = 33 chars
-    $consoleWidth = [Math]::Max([Console]::WindowWidth, 80)
+    try {
+        $consoleWidth = [Math]::Max([Console]::WindowWidth, 120)
+    }
+    catch {
+        # If we can't get console width (e.g. running in non-interactive environment), use a default
+        $consoleWidth = 120
+    }
     $fixedColumnsWidth = 33
     $nameWidth = $consoleWidth - $fixedColumnsWidth
 
